@@ -26,6 +26,7 @@ public class BlockNestedJoin extends Join {
     Batch rightbatch; // Buffer for right input stream
     ObjectInputStream in; // File pointer to the right hand materialized file
 
+    int lnum; // Block number for left side buffers
     int lcurs; // Cursor for left side buffer
     int rcurs; // Cursor for right side buffer
     boolean eosl; // Whether end of stream (left table) is reached
@@ -67,6 +68,7 @@ public class BlockNestedJoin extends Join {
         leftindex = left.getSchema().indexOf(leftattr);
         rightindex = right.getSchema().indexOf(rightattr);
         Batch rightpage;
+        lnum = 0;
         /** initialize the cursors of input buffers **/
         lcurs = 0;
         rcurs = 0;
@@ -118,11 +120,10 @@ public class BlockNestedJoin extends Join {
      **/
 
     public Batch next() {
-        // System.out.print("BlockNestedJoin:--------------------------in
-        // next----------------");
-        // Debug.PPrint(con);
-        // System.out.println();
-        int i, j;
+        System.out.print("BlockNestedJoin:--------------------------in next----------------");
+        Debug.PPrint(con);
+        System.out.println();
+        int i, j, k;
         if (eosl) {
             close();
             return null;
@@ -131,7 +132,7 @@ public class BlockNestedJoin extends Join {
 
         while (!outbatch.isFull()) {
 
-            if (lcurs == 0 && eosr == true) { // End of left page and end of right file
+            if (lcurs == 0 && lnum == 0 && eosr == true) { // End of last left page and end of right file
                 if (!fetchNewLeftBlock()) {
                     eosl = true;
                     return outbatch;
@@ -141,35 +142,51 @@ public class BlockNestedJoin extends Join {
             while (eosr == false) {
 
                 try {
-                    if (rcurs == 0 && lcurs == 0) {
+                    /* When all tuples in last left page and right page checked, fetch next right page */
+                    if (rcurs == 0 && lnum == 0 && lcurs == 0) { 
                         rightbatch = (Batch) in.readObject();
                     }
-                    for (int leftBuffIdx = 0; leftBuffIdx < leftBatches.length; leftBuffIdx++) {
-                        for (i = lcurs; i < leftBatches[i].size(); i++) {
-                            for (j = rcurs; j < rightbatch.size(); j++) {
-                                Tuple lefttuple = leftBatches[i].elementAt(i);
-                                Tuple righttuple = rightbatch.elementAt(j);
+
+                    for (i = lnum; i < leftBatches.length; i++) {
+
+                        /* If left buffer is empty */
+                        if (leftBatches[i] == null) {
+                            break;
+                        }
+
+                        for (j = lcurs; j < leftBatches[i].size(); j++) {
+                            for (k = rcurs; k < rightbatch.size(); k++) {
+                                Tuple lefttuple = leftBatches[i].elementAt(j);
+                                Tuple righttuple = rightbatch.elementAt(k);
                                 if (lefttuple.checkJoin(righttuple, leftindex, rightindex)) {
+                                    // Debug.PPrint(lefttuple);
+                                    // Debug.PPrint(righttuple);
                                     Tuple outtuple = lefttuple.joinWith(righttuple);
 
                                     // Debug.PPrint(outtuple);
                                     // System.out.println();
                                     outbatch.add(outtuple);
                                     if (outbatch.isFull()) {
-                                        if (i == leftBatches[i].size() - 1 && j == rightbatch.size() - 1) {// case 1
+                                        if (j == leftBatches[i].size() - 1 && k == rightbatch.size() - 1) { // case 1
                                             lcurs = 0;
                                             rcurs = 0;
-                                        } else if (i != leftBatches[i].size() - 1 && j == rightbatch.size() - 1) {// case
-                                                                                                                  // 2
-                                            lcurs = i + 1;
+                                            if (i != numBuff-3) { // last left buffer
+                                                lnum = i + 1;
+                                            } else {
+                                                lnum = 0;
+                                            }
+                                        } else if (j != leftBatches[i].size() - 1 && k == rightbatch.size() - 1) { // case 2
+                                            lcurs = j + 1;
                                             rcurs = 0;
-                                        } else if (i == leftBatches[i].size() - 1 && j != rightbatch.size() - 1) {// case
-                                                                                                                  // 3
-                                            lcurs = i;
-                                            rcurs = j + 1;
+                                            lnum = i;
+                                        } else if (j == leftBatches[i].size() - 1 && k != rightbatch.size() - 1) { // case 3
+                                            lcurs = j;
+                                            rcurs = k + 1;
+                                            lnum = i;
                                         } else {
-                                            lcurs = i;
-                                            rcurs = j + 1;
+                                            lcurs = j;
+                                            rcurs = k + 1;
+                                            lnum = i;
                                         }
                                         return outbatch;
                                     }
@@ -179,6 +196,8 @@ public class BlockNestedJoin extends Join {
                         }
                         lcurs = 0;
                     }
+                    lnum = 0;
+
                 } catch (EOFException e) {
                     try {
                         in.close();
@@ -214,7 +233,7 @@ public class BlockNestedJoin extends Join {
         for (int toFetch = 0; toFetch < numBuff - 2; toFetch++) {
             leftBatches[toFetch] = (Batch) left.next();
 
-            if (leftBatches[toFetch] == null) {
+            if (toFetch == 0 && leftBatches[toFetch] == null) { // no left pages
                 return false;
             }
             /**
