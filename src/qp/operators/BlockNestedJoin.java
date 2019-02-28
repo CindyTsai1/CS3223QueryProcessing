@@ -22,7 +22,7 @@ public class BlockNestedJoin extends Join {
     static int filenum = 0; // To get unique filenum for this operation
 
     Batch outbatch; // Output buffer
-    Batch[] leftbatches = new Batch[numBuff - 2]; // Buffers for left input stream
+    Batch[] leftBatches; // Buffers for left input stream
     Batch rightbatch; // Buffer for right input stream
     ObjectInputStream in; // File pointer to the right hand materialized file
 
@@ -36,6 +36,19 @@ public class BlockNestedJoin extends Join {
         schema = jn.getSchema();
         jointype = jn.getJoinType();
         numBuff = jn.getNumBuff();
+    }
+    
+    /** 
+     * Number of buffers available to this join operator 
+     * Overrides method in Join 
+     **/
+    
+    public void setNumBuff(int num){
+        this.numBuff = num;
+        leftBatches = new Batch[num - 2];
+        for (int i = 0; i < num - 2; i++) {
+            leftBatches[i] = new Batch(batchsize);
+        }
     }
 
     /**
@@ -131,10 +144,10 @@ public class BlockNestedJoin extends Join {
                     if (rcurs == 0 && lcurs == 0) {
                         rightbatch = (Batch) in.readObject();
                     }
-                    for (int leftBuffIdx = 0; leftBuffIdx < leftbatches.length; leftBuffIdx++) {
-                        for (i = lcurs; i < leftbatches[i].size(); i++) {
+                    for (int leftBuffIdx = 0; leftBuffIdx < leftBatches.length; leftBuffIdx++) {
+                        for (i = lcurs; i < leftBatches[i].size(); i++) {
                             for (j = rcurs; j < rightbatch.size(); j++) {
-                                Tuple lefttuple = leftbatches[i].elementAt(i);
+                                Tuple lefttuple = leftBatches[i].elementAt(i);
                                 Tuple righttuple = rightbatch.elementAt(j);
                                 if (lefttuple.checkJoin(righttuple, leftindex, rightindex)) {
                                     Tuple outtuple = lefttuple.joinWith(righttuple);
@@ -143,14 +156,14 @@ public class BlockNestedJoin extends Join {
                                     // System.out.println();
                                     outbatch.add(outtuple);
                                     if (outbatch.isFull()) {
-                                        if (i == leftbatches[i].size() - 1 && j == rightbatch.size() - 1) {// case 1
+                                        if (i == leftBatches[i].size() - 1 && j == rightbatch.size() - 1) {// case 1
                                             lcurs = 0;
                                             rcurs = 0;
-                                        } else if (i != leftbatches[i].size() - 1 && j == rightbatch.size() - 1) {// case
+                                        } else if (i != leftBatches[i].size() - 1 && j == rightbatch.size() - 1) {// case
                                                                                                                   // 2
                                             lcurs = i + 1;
                                             rcurs = 0;
-                                        } else if (i == leftbatches[i].size() - 1 && j != rightbatch.size() - 1) {// case
+                                        } else if (i == leftBatches[i].size() - 1 && j != rightbatch.size() - 1) {// case
                                                                                                                   // 3
                                             lcurs = i;
                                             rcurs = j + 1;
@@ -199,9 +212,9 @@ public class BlockNestedJoin extends Join {
      **/
     public boolean fetchNewLeftBlock() {
         for (int toFetch = 0; toFetch < numBuff - 2; toFetch++) {
-            leftbatches[toFetch] = (Batch) left.next();
+            leftBatches[toFetch] = (Batch) left.next();
 
-            if (leftbatches[toFetch] == null) {
+            if (leftBatches[toFetch] == null) {
                 return false;
             }
             /**
