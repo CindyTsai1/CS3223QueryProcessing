@@ -29,4 +29,3 @@ public class sym {
   public static final int DOT = 5;
   public static final int GREATERTHAN = 8;
 }
-

@@ -7,8 +7,6 @@ import qp.operators.*;
 import qp.optimizer.*;
 import qp.parser.*;
 
-
-
 public class QueryMain{
 
     static PrintWriter out;
@@ -21,9 +19,7 @@ public class QueryMain{
 			System.exit(1);
 		}
 
-
 		/** Enter the number of bytes per page **/
-
 		System.out.println("enter the number of bytes per page");
 		BufferedReader in = new BufferedReader(new InputStreamReader(System.in));
 		String temp;
@@ -35,9 +31,6 @@ public class QueryMain{
 			e.printStackTrace();
 		}
 
-
-
-
 		String queryfile = args[0];
 		String resultfile = args[1];
 		FileInputStream source = null;
@@ -48,16 +41,12 @@ public class QueryMain{
 			System.exit(1);
 		}
 
-
 		/** scan the query **/
-
 		Scaner sc = new Scaner(source);
 		parser p = new parser();
 		p.setScanner(sc);
 
-
 		/** parse the query **/
-
 		try{
 			p.parse();
 		}catch(Exception e){
@@ -66,10 +55,8 @@ public class QueryMain{
 		}
 
 		/** SQLQuery is the result of the parsing **/
-
 		SQLQuery sqlquery = p.getSQLQuery();
 		int numJoin = sqlquery.getNumJoin();
-
 
 		/** If there are joins then assigns buffers to each join operator
 		 while preparing the plan
@@ -77,7 +64,6 @@ public class QueryMain{
 		/** As buffer manager is not implemented, just input the number of
 		 buffers available
 		 **/
-
 
 		if(numJoin !=0){
 			System.out.println("enter the number of buffers available");
@@ -91,21 +77,15 @@ public class QueryMain{
 			}
 		}
 
-
-
 		/** Let check the number of buffers available is enough or not **/
-
 		int numBuff = BufferManager.getBuffersPerJoin();
 		if(numJoin>0 && numBuff<3){
 			System.out.println("Minimum 3 buffers are required per a join operator ");
 			System.exit(1);
 		}
 
-
-
         /** This part is used When some random initial plan is required instead of comple optimized plan **/
         /**
-
         RandomInitialPlan rip = new RandomInitialPlan(sqlquery);
         Operator logicalroot = rip.prepareInitialPlan();
         PlanCost pc = new PlanCost();
@@ -127,10 +107,7 @@ public class QueryMain{
 			System.exit(1);
 		}
 
-
-
 		/** preparing the execution plan **/
-
 		Operator root = RandomOptimizer.makeExecPlan(logicalroot);
 
 		/** Print final Plan **/
@@ -138,11 +115,8 @@ public class QueryMain{
 		Debug.PPrint(root);
 		System.out.println();
 
-
         /** Ask user whether to continue execution of the program **/
-
 		System.out.println("enter 1 to continue, 0 to abort ");
-
 
 		try {
 			temp = in.readLine();
@@ -157,8 +131,6 @@ public class QueryMain{
 
 		long starttime = System.currentTimeMillis();
 
-
-
 		if(root.open()==false){
 			System.out.println("Root: Error in opening of root");
 			System.exit(1);
@@ -170,19 +142,13 @@ public class QueryMain{
 			System.exit(1);
 		}
 
-
-
-
 		/** print the schema of the result **/
 		Schema schema = root.getSchema();
 		numAtts = schema.getNumCols();
 		printSchema(schema);
 		Batch resultbatch;
 
-
 		/** print each tuple in the result **/
-
-
 		while((resultbatch=root.next())!=null){
 			for(int i=0;i<resultbatch.size();i++){
 				printTuple(resultbatch.elementAt(i));
@@ -196,7 +162,6 @@ public class QueryMain{
 		System.out.println("Execution time = "+ executiontime);
 
 	}
-
 
 	protected static void printTuple(Tuple t){
 		for(int i=0;i<numAtts;i++){
@@ -221,10 +186,3 @@ public class QueryMain{
 	}
 
 }
-
-
-
-
-
-
-
