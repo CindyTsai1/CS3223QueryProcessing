@@ -4,7 +4,6 @@ all the join operators
 
 package qp.optimizer;
 
-
 public class BufferManager{
 
     static int numBuffer;

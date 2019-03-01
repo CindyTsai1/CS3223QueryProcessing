@@ -163,8 +163,8 @@ public class BlockNestedJoin extends Join {
                                     // Debug.PPrint(righttuple);
                                     Tuple outtuple = lefttuple.joinWith(righttuple);
 
-                                    // Debug.PPrint(outtuple);
-                                    // System.out.println();
+                                    Debug.PPrint(outtuple);
+                                    System.out.println();
                                     outbatch.add(outtuple);
                                     if (outbatch.isFull()) {
                                         if (j == leftBatches[i].size() - 1 && k == rightbatch.size() - 1) { // case 1
