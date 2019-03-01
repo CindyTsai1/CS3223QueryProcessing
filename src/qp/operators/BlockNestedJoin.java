@@ -120,9 +120,9 @@ public class BlockNestedJoin extends Join {
      **/
 
     public Batch next() {
-        System.out.print("BlockNestedJoin:--------------------------in next----------------");
-        Debug.PPrint(con);
-        System.out.println();
+        // System.out.print("BlockNestedJoin:--------------------------in next----------------");
+        // Debug.PPrint(con);
+        // System.out.println();
         int i, j, k;
         if (eosl) {
             close();
@@ -163,8 +163,8 @@ public class BlockNestedJoin extends Join {
                                     // Debug.PPrint(righttuple);
                                     Tuple outtuple = lefttuple.joinWith(righttuple);
 
-                                    Debug.PPrint(outtuple);
-                                    System.out.println();
+                                    // Debug.PPrint(outtuple);
+                                    // System.out.println();
                                     outbatch.add(outtuple);
                                     if (outbatch.isFull()) {
                                         if (j == leftBatches[i].size() - 1 && k == rightbatch.size() - 1) { // case 1
