@@ -101,10 +101,20 @@ public class QueryMain{
 		 **/
 
 		RandomOptimizer ro = new RandomOptimizer(sqlquery);
-		Operator logicalroot = ro.getOptimizedPlan();
-		if(logicalroot==null){
+		DynamicOptimizer dynamicOptimizer = new DynamicOptimizer(sqlquery);
+		Operator randomRoot = ro.getOptimizedPlan();
+		Operator dynamicRoot = dynamicOptimizer.getOptimizedPlan();
+		if(randomRoot==null && dynamicRoot == null){
 			System.out.println("root is null");
 			System.exit(1);
+		}
+
+		Operator logicalroot;
+		PlanCost pc = new PlanCost();
+		if(pc.getCost(randomRoot) < pc.getCost(dynamicRoot)) {
+			logicalroot = randomRoot;
+		} else {
+			logicalroot = dynamicRoot;
 		}
 
 		/** preparing the execution plan **/
