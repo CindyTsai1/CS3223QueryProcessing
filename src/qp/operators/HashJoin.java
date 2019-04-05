@@ -1,348 +1,442 @@
-/** page hash join algorithm **/
-
 package qp.operators;
 
-import qp.utils.*;
-import java.io.*;
-import java.util.*;
-import java.lang.*;
+import java.io.EOFException;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
 
-public class HashJoin extends Join {
+import qp.utils.Attribute;
+import qp.utils.Batch;
+import qp.utils.Tuple;
 
-    int batchsize; // Number of tuples per out batch
-	int leftBatchSize;
-	int rightBatchSize;
+public class HashJoin extends Join{
 
-    /**
-     * The following fields are useful during execution of the NestedJoin operation
+    int batchsize;  //Number of tuples per out batch
+    int right_batchsize;
+    int left_batchsize;
+
+    /** The following fields are useful during execution of
+     ** the NestedJoin operation
      **/
-    int leftindex; // Index of the join attribute in left table
-    int rightindex; // Index of the join attribute in right table
+    int leftindex;     // Index of the join attribute in left table
+    int rightindex;    // Index of the join attribute in right table
 
-    String rfname; // The file name where the right table is materialize
+    String rfname;    // The file name where the right table is materialize
+    String in_lfname;
+    String in_rfname;
 
-    int filenum; // To get unique filenum for this operation
+    Batch outbatch;   // Output buffer
+    Batch inputbatch;  // Buffer for input stream for left table
+    Batch inputbatch_right;
+    Batch[] in_memory_ht;//size should be (numBuff -2)
+    //Batch rightbatch;  // Buffer for right input stream
+    ObjectInputStream in_right; // File pointer to the right hand materialized file
+    ObjectInputStream in_left;
+    int curr_partition_index = -1;
 
-    Batch[] outBatches; // Output buffer for partition
-	Batch inBatch;  // Input buffer for partition and join
-	Batch[] hashTable;
-    Batch leftBatches; // Buffers for left input stream
-    Batch rightbatch; // Buffer for right input stream
-    ObjectInputStream in; // File pointer to the right hand materialized file
-	ObjectOutputStream out;
+    int lcurs;    // Cursor for left side buffer
+    int rcurs;    // Cursor for right side buffer
+    boolean eosl = true;  // Whether end of stream (left table) is reached
+    boolean eosr = true;  // End of stream (right table)
 
-    int lcurs; // Cursor for left side buffer
-    int rcurs; // Cursor for right side buffer
-	int currentFile; 
-    boolean eosl; // Whether end of stream (left table) is reached
-    boolean eosr; // End of stream (right table)
-
-    public HashJoin(Join jn) {
-        super(jn.getLeft(), jn.getRight(), jn.getCondition(), jn.getOpType());
+    public HashJoin(Join jn){
+        super(jn.getLeft(),jn.getRight(),jn.getCondition(),jn.getOpType());
         schema = jn.getSchema();
         jointype = jn.getJoinType();
         numBuff = jn.getNumBuff();
     }
 
-    /**
-     * During open finds the index of the join attributes Materializes the right
-     * hand side into a file Opens the connections
+
+    /** During open finds the index of the join attributes
+     ** Finish the partition phase: partition right and left table into numBuff - 1 partitions
+     **
      **/
 
-    public boolean open() {
 
-        /** select number of tuples per batch **/
-        int tuplesize = schema.getTupleSize();
-		leftBatchSize = Batch.getPageSize() / left.getSchema().getTupleSize();
-		rightBatchSize = Batch.getPageSize() / right.getSchema().getTupleSize();
 
+    public boolean open(){
+        int tuplesize=schema.getTupleSize();
+        //num tuples per batch for result table
+        batchsize=Batch.getPageSize()/tuplesize;
+        int right_tupleSize = right.getSchema().getTupleSize();
+        //num tuples per batch for right table
+        right_batchsize = Batch.getPageSize()/right_tupleSize;
+        int left_tupleSize = right.getSchema().getTupleSize();
+        //num tuples per batch for left table
+        left_batchsize = Batch.getPageSize()/left_tupleSize;
+
+        //index of join attributes
         Attribute leftattr = con.getLhs();
-        Attribute rightattr = (Attribute) con.getRhs();
+        Attribute rightattr =(Attribute) con.getRhs();
         leftindex = left.getSchema().indexOf(leftattr);
         rightindex = right.getSchema().indexOf(rightattr);
 
         /** initialize the cursors of input buffers **/
-        lcurs = 0;
-        rcurs = 0;
-		currentFile = -1;
-		
-        eosl = true;
-        eosr = true;
+        lcurs = 0; rcurs =0;
 
-		if(!partition(left, "Left", leftindex)) {
-			return false;
-		}
-		if(!partition(right, "Right", rightindex)) {
-			return false;
-		}
-		batchsize = Batch.getPageSize() / tuplesize;
-		rfname = "HashJoin" + "right" + String.valueOf(currentFile);
-		return true;
-	}
+	/*input buffer and out put buffer*/
+        Batch inputpage;
 
-	/**
-	 * Partition the table into output buffers
-	 **/
+	/*initialise bucket*/
+        Batch[] buckets = new Batch[numBuff - 1];
 
-	public boolean partition(Operator table, String name, int index) {
-		if (name.equal("left")) {
-			batchsize = leftBatchSize;
-		} else {
-			batchsize = rightBatchSize;
-		}
-
-		/** reset the output buffers for partition **/
-		outBatches = new Batch[numBuff - 1];
-        for (int i = 0; i < numBuff - 1; i++) {
-            outBatches[i] = new Batch(batchsize);
-        }
-
-		if(!table.open()) {
-			return false;
-		} else {
-			//when there is still pages to fetch in the table
-			while((inBatch = (Batch) table.next()) != null) {
-				for(i = 0; i < inBatch.size(); i++) {
-					Tuple tuple = inBatch.elementAt(i);
-					int hash = Integer.valueOf(String.valueOf(tuple.dataAt(index))) % (numBuff-1);
-					outBatches[hash].add(tuple);
-					if(outBatches[hash].isFull()) {
-						if(!outputBuffers(hash, name)) {
-							return false;
-						}
-					}
-				}
-			}
-		}
-		/** all tuples has been hashed **/
-		for(int i = 0; i < numBuff - 1; i++) {
-			if(!outputBuffers(i, name)) {
-				return false;
-			}
-		}
-		
-		if(!table.close()) {
-			return false;
-		}
-		return true;
-	}
-
-	/**
-	 * write the files in output buffers into files
-	 **/
-
-	public boolean outputBuffers(int index, String name) {
-		rfname = "HashJoin" + name + String.valueOf(index);
-		File file = new File(rfname);
-		try {
-			if(file.isFile()) {
-				out = new AppendingObjectOutputStream(new FileOutputStream(rfname));
-			} else {
-				out = new ObjectOutputStream(new FileOutputStream(rfname));
-			}
-			out.writeObject(outBatches[index]);
-			out.close();
-		} catch (IOException io) {
-			out.close();
-			System.out.println("HashJoin: Writing the temporary file error");
+	/*partition right table first*/
+        if(!right.open()){
             return false;
-		}
-		outBatches[index] = new Batch(batchsize);
-		return true;
-	}
-
-    /**
-     * from input buffers selects the tuples satisfying join condition And returns a
-     * page of output tuples
-     **/
-
-    public Batch next() {
-        // System.out.print("HashJoin:--------------------------in next----------------");
-        // Debug.PPrint(con);
-        // System.out.println();
-		
-        int i, j, k;
-        
-        outbatch = new Batch(batchsize);
-
-        while (!outbatch.isFull()) {
-			if (eosl && currentFile == numBuff - 2) {	//End of last left file, finished all join
-				return (outbatch.isEmpty()) ? null : outbatch;
-			}
-
-			if (eosr) {  //End of right file, fetch new left file for probing of next partition
-				if(eosl) {
-					currentFile++;
-				}
-				fetchNewLeftFile();
-				rfname = "HashJoin" + "right" + String.valueOf(currentFile);
-				rcurs = 0;		//restart right cursor 
-				lcurs = 0;		//restart left cursor
-
-				try {
-					in = new ObjectInputStream(new FileInputStream(rfname));
-					eosr = false;	//not end of right file
-				} catch (IOException io) {
-					System.err.println("HashJoin:error in reading the right file");
-					System.exit(1);
-				}
-			}
-
-            while (!eosr) {
-				try {
-					do {
-						inBatch = (Batch) in.readObject();
-					} while (inBatch == null);
-					rcurs = 0;
-				} catch(EOFException eof) {
-					try {
-                        in.close();
-                    } catch (IOException io) {
-                        System.out.println("HashJoin:Error in closing file");
+        }else{
+            //if(right.getOpType() != OpType.SCAN){
+            try{
+                //initialise bucket
+                for(int i = 0; i < numBuff-1;i++){
+                    buckets[i] = new Batch(right_batchsize);
+                }
+                //initialise right table output filewriter
+                ObjectOutputStream[] outStream_right = new ObjectOutputStream[numBuff - 1];
+                for(int i = 0; i<numBuff-1;i++){
+                    String fname =  "HJtempRight-" + String.valueOf(i) + this.hashCode();
+                    outStream_right[i] = new ObjectOutputStream(new FileOutputStream(fname));
+                }
+                //hash each right table page until the end of right table
+                //whenever each bucket is full, write into file
+                while( (inputpage = right.next()) != null){
+                    for(int i = 0; i < inputpage.size();i++){
+                        //hash each tuple in input right page
+                        Tuple t = inputpage.elementAt(i);
+                        int key = Integer.valueOf(String.valueOf(t.dataAt(rightindex)))%(numBuff-1);
+                        //System.out.println("key: " + key);
+                        if(buckets[key].size() == right_batchsize){
+                            //bucket is full, write into disk
+                            outStream_right[key].writeObject(buckets[key]);
+                            buckets[key] = new Batch(right_batchsize);
+                        }
+                        buckets[key].add(t);
                     }
-                    eosr = true;
-				} catch (IOException io) {
-                    System.out.println("HashJoin:right file reading error");
-                    System.exit(1);
+                }
+                //write the rest buckets into file
+                for(int i = 0; i < numBuff - 1;i++){
+                    if(!buckets[i].isEmpty()){
+                        outStream_right[i].writeObject(buckets[i]);
+                    }
                 }
 
-				for (; rcurs < inBatch.size(); rcurs++) {
-					//hash tuple
-					Tuple righttuple = inBatch.elementAt(rcurs);
-					int hash = Integer.valueOf(String.valueOf(tuple.dataAt(rightindex))) % (numBuff - 2);
-					for(lcurs = 0; lcurs < hashTable[hash].size(); lcurs++) {
-						Tuple lefttuple = hashTable[hash].elementAt(lcurs);
-						if (lefttuple.checkJoin(righttuple, leftindex, rightindex)) {
-							Tuple outtuple = lefttuple.joinWith(righttuple);
-							outbatch.add(outtuple);
-							if(outbatch.isFull()) {
-								return outbatch;
-							}
-						}
-					}
-				}
-			}
-		}
-        return outbatch;
-    }
+                //close output stream for each buckets
+                for(int i = 0; i < numBuff -1 ;i++){
+                    outStream_right[i].close();
+                }
+            }catch(IOException io){
+                System.out.println("HashJoin:writing the temporay file error for partition phase");
+                return false;
+            }
+            //}
+            if(!right.close())
+                return false;
+        }
 
-    /** Close the operator */
-    public boolean close() {
-        File f = new File(rfname);
-        if(f.isFile()) {
-			f.delete();
-		}
+	/*partition left table*/
+        if(!left.open())
+            return false;
+        else{
+            try{
+                //initialise bucket
+                for(int i = 0; i < numBuff-1;i++){
+                    buckets[i] = new Batch(left_batchsize);
+                }
+                //initialise left output filewriter
+                ObjectOutputStream[] outStream_left = new ObjectOutputStream[numBuff - 1];
+                for(int i = 0; i<numBuff-1;i++){
+                    String fname = "HJtempLeft-" + String.valueOf(i)+ this.hashCode();
+                    outStream_left[i] = new ObjectOutputStream(new FileOutputStream(fname));
+                }
+
+                //hash each right table page until the end of right table
+                //whenever each bucket is full, write into file
+                while( (inputpage = left.next()) != null){
+                    for(int i = 0; i < inputpage.size();i++){
+                        Tuple t = inputpage.elementAt(i);
+                        //int key = (t.dataAt(leftindex).hashCode())%(numBuff-1);
+                        int key = Integer.valueOf(String.valueOf(t.dataAt(leftindex)))%(numBuff-1);
+                        if(buckets[key].size() == left_batchsize){
+                            //bucket is full, write into disk
+                            outStream_left[key].writeObject(buckets[key]);
+                            buckets[key] = new Batch(left_batchsize);
+                        }
+                        buckets[key].add(t);
+                    }
+                }
+                //write the rest buckets into file
+                for(int i = 0; i < numBuff - 1;i++){
+                    if(!buckets[i].isEmpty()){
+                        outStream_left[i].writeObject(buckets[i]);
+                    }
+                }
+
+                //close output stream for each bucket
+                for(int i = 0; i < numBuff -1 ;i++){
+                    outStream_left[i].close();
+                }
+            }catch(IOException io){
+                System.out.println("HashJoin:writing the temporay file error for partition phase");
+                return false;
+            }
+            //}
+            if(!left.close())
+                return false;
+        }
+        rcurs = 0;
+        lcurs = 0;
         return true;
     }
 
-    /**
-     * Fetches new block of left pages Returns false if end of left stream reached
+
+
+    /** construct in memory hash table for each partition of left table
+     * each time fetch one page of right table from same partition
+     * hash each tuple and match with the left table tuples in the same bucket
+     * selects the tuples satisfying join condition
+     ** And returns a page of output tuples
      **/
-    public void fetchNewLeftFile() {
-		hashTable = newBatch[numBuff - 2];
-		for (int i = 0; i < numBuff - 1; i++) {
-            hashTable[i] = new Batch(leftBatchSize);
+
+
+    public Batch next(){
+        //System.out.print("HashJoin:--------------------------in next----------------");
+        //Debug.PPrint(con);
+        //System.out.println();
+
+        outbatch = new Batch(batchsize);
+        while(!outbatch.isFull()){
+            if(lcurs == 0 && rcurs == 0 && (eosr == true)){
+                //if at the beginning or finish matching one round of right table
+                if(curr_partition_index == (numBuff - 2) && eosl == true){
+                    //have finish all the partition, finish the join
+                    //partition index 0 - numBuff - 2
+                    if(!outbatch.isEmpty()) return outbatch;
+                    return null;
+                }else{
+                    if(eosl == true){
+                        //start a new partition if at the end of the current partition of left table
+                        curr_partition_index++;
+                        in_lfname = "HJtempLeft-" + String.valueOf(curr_partition_index) + this.hashCode();
+                        in_rfname = "HJtempRight-" + String.valueOf(curr_partition_index)+ this.hashCode();
+                    }
+                    //if not at end of current partition for left table, still remain in current partition
+                    //start a new round for right table for the rest of the left table pages
+                    try{
+                        in_left = new ObjectInputStream(new FileInputStream(in_lfname));
+                        in_right = new ObjectInputStream(new FileInputStream(in_rfname));
+                    }catch(IOException io){
+                        System.out.println("HashJoin:error in opening outstream for join phase" + "in_lfname " + in_lfname + " in_rfname " + in_rfname);
+                        continue;
+                    }
+                    //initialize in-memory hashtable to store new partitions of each partition of left table
+                    //index from 0 - numBuff-3
+                    in_memory_ht = new Batch[numBuff - 2];
+                    for(int i = 0; i < numBuff - 2; i ++){
+                        in_memory_ht[i] = new Batch(left_batchsize);
+                    }
+                    eosl = false;
+                    eosr = false;
+                    inputbatch_right = null;
+                    try{
+                        try{
+                            inputbatch = (Batch)in_left.readObject();
+                            while(inputbatch == null) inputbatch = (Batch)in_left.readObject();
+                        }catch(IOException io){
+                            //end of left table current partition
+                            eosl = true;
+                            eosr = true;
+                            in_left.close();
+                            in_right.close();
+                            continue;
+                        }
+                        int key;
+                        int inputindex = 0;
+
+
+                        //hash a new left table partition into in-memory ht
+                        while(true){
+
+                            //check cursor
+                            if(inputindex >= inputbatch.size()){
+                                try{
+                                    //load a new left table page for in-memory partition
+                                    inputbatch = (Batch)in_left.readObject();
+                                    while(inputbatch == null || inputbatch.isEmpty()) inputbatch = (Batch)in_left.readObject();
+                                    inputindex = 0;
+                                }catch(IOException io){
+                                    //no more page for this partition, finish this partition
+                                    in_left.close();
+                                    eosl = true;
+                                    break;
+                                }
+                            }
+                            //using a different hf to build in-memory hash table
+                            key = Integer.valueOf(String.valueOf(inputbatch.elementAt(inputindex).dataAt(leftindex)))%(numBuff-2);
+
+                            //check whether the bucket is full; if yes, stop reading, matching right table tuples first,store rest of non-partitioned left table tuples in original file
+                            if(in_memory_ht[key].size() >= left_batchsize){
+                                eosl = false;
+                                String tempFile = "tempFile" + this.hashCode();
+                                ObjectOutputStream temp = new ObjectOutputStream(new FileOutputStream(tempFile));
+                                //write the rest tuples in current input buffer back
+                                if(inputindex <= inputbatch.size() - 1){
+                                    for(int i = 0; i < inputindex ; i++){
+                                        inputbatch.remove(0);
+                                    }
+                                    temp.writeObject(inputbatch);
+                                }
+                                inputindex = 0;
+                                try{
+                                    //write the rest left table pages into file
+                                    while(true){
+                                        temp.writeObject(in_left.readObject());
+                                    }
+                                }catch(IOException e){
+                                    //reach end of left table partition
+                                    in_left.close();
+                                    temp.close();
+                                    File f = new File(in_lfname);
+                                    f.delete();
+                                }
+                                //write the rest left table pages in temp file back to original left table partition file
+                                ObjectOutputStream out_left = new ObjectOutputStream(new FileOutputStream(in_lfname));
+                                ObjectInputStream temp_in = new ObjectInputStream(new FileInputStream(tempFile));
+                                try{
+                                    while(true){
+                                        out_left.writeObject(temp_in.readObject());
+                                    }
+                                }catch(IOException io){
+                                    //write finish
+                                    try{
+                                        temp_in.close();
+                                        out_left.close();
+                                        File f = new File(tempFile);
+                                        f.delete();
+                                        in_left.close();
+                                    }catch(IOException io1){
+                                        System.out.println("Hashjoin: error in closing temp write fil " + in_lfname);
+                                    }
+                                }
+                                break;
+                            }//finish writting the rest of the current partition back
+
+                            //the bucket is not full, still able to write into the bucket
+                            in_memory_ht[key].add(inputbatch.elementAt(inputindex++));
+                        }//finish hashing one left table partition into in-memory ht
+
+                        //load the right table page for matching
+                        try{
+                            inputbatch_right = (Batch)in_right.readObject();//handle the case if the partition is empty
+                            while(inputbatch_right == null || inputbatch_right.size() == 0) {
+                                inputbatch_right = (Batch)in_right.readObject();
+                            }
+                            eosr = false;
+                        }catch(IOException io){
+                            //end of the right table
+                            eosr = true;
+                            try{
+                                in_right.close();
+                            }catch(IOException io1){
+                                System.out.println("HashJoin:error in closingfile");
+                            }
+                            continue;//start a new round
+                        }
+
+                    }catch(IOException io){
+                        System.out.println("HashJoin:end of input file");
+                        eosl = true;
+                        eosr = true;
+                        continue;
+                    } catch (ClassNotFoundException e) {
+                        System.out.println("HashJoin:Some error in deserialization ");
+                        System.exit(1);
+                    }
+                }
+            }//finish starting a new round
+
+            //generate result tuple
+            Tuple lefttuple;
+            Tuple righttuple;
+            int key;
+            Batch curr_bucket;
+
+            //hash each right table tuple, match with the existing left table tuples in the bucket
+            while(rcurs < inputbatch_right.size() ){
+                righttuple = inputbatch_right.elementAt(rcurs);
+                //hash the right table tuple using the second hash function
+                key = Integer.valueOf(String.valueOf(righttuple.dataAt(rightindex)))%(numBuff-2);
+                curr_bucket = in_memory_ht[key];
+                while(lcurs < curr_bucket.size()){
+                    //match each left table tuple in the partition
+                    lefttuple = curr_bucket.elementAt(lcurs++);
+                    if(lefttuple.checkJoin(righttuple,leftindex,rightindex)){
+                        Tuple outtuple = lefttuple.joinWith(righttuple);
+                        //System.out.println("matching: " + outtuple.data());
+                        outbatch.add(outtuple);
+                        if(outbatch.isFull()){
+                            //System.out.println("here returning full batch");
+                            Batch result  = outbatch;
+                            outbatch = new Batch(batchsize);
+                            return result;
+                        }
+                    }
+                }
+                //for current right tuple, finish matching with all left bucket tuples
+                if(lcurs >= curr_bucket.size()){
+                    //move on to next right tuple, reset lcurs to 0
+                    rcurs++;
+                    lcurs = 0;
+                }
+                //finish the current right table page, need to load a new page into buffer
+                if(rcurs >= inputbatch_right.size()){
+                    //load a new right table page
+                    rcurs = 0;
+                    lcurs = 0;
+                    try{
+                        inputbatch_right = (Batch)in_right.readObject();
+                        while(inputbatch_right == null || inputbatch_right.isEmpty()) {
+                            inputbatch_right = (Batch)in_right.readObject();
+                        }
+                        eosr = false;
+
+                    }catch(IOException io){
+                        //reach end of right table partition
+                        eosr = true;
+                        try{
+                            in_right.close();
+                        }catch(IOException io1){
+                            System.out.println("HashJoin:error in closing file");
+                        }
+                        break;
+                    } catch (ClassNotFoundException e) {
+                        System.out.println("HashJoin:Some error in deserialization ");
+                        System.exit(1);
+                    }
+                }
+            }
         }
 
-		esol = false;
-		rfname = "HashJoin" + "left" + String.valueOf(currentFile);
-		try {
-			in = new ObjectInputStream(new FileInputStream(rfname));
-		} catch(IOException io) {
-			System.err.println("HashJoin:error in reading the left file");
-			System.exit(1);
-		}
-
-		do {
-			inBatch = (Batch) in.readObject();
-		} while (inBatch == null);
-
-		boolean done = false;
-
-		while (!done) {
-			// done with one inBatch, fetch the next
-			if(lcurs >= inBatch.size()) {
-				try {
-					lcurs = 0;
-					do {
-						inBatch = (Batch) in.readObject();
-					} while (inBatch == null);
-
-				} catch(EOFException eof) {
-					try {
-                        in.close();
-                    } catch (IOException io) {
-                        System.out.println("HashJoin:Error in closing file");
-                    }
-					close();
-                    eosl = true;
-				} catch (IOException io) {
-                    System.out.println("HashJoin:left file reading error");
-                    System.exit(1);
-                }
-			}
-
-			for (; lcurs < inBatch.size(); lcurs++) {
-				//hash tuple
-				Tuple tuple = inBatch.elementAt(lcurs);
-				int hash = Integer.valueOf(String.valueOf(tuple.dataAt(index))) % (numBuff - 2);
-
-				//if hashtable full, store the rest of the tuple back to original file
-				if(hashTable[hash].isFull()) {
-					eosl = false;
-					ObjectOutputStream temp = new ObjectOutputStream(new FileOutputStream("tempFile"));
-					while(lcurs < inBatch.size()) {
-						temp.writeObject(inBatch.elementAt(lcurs));
-						lcurs++;
-					}
-					try {
-						while(true){
-							temp.writeObject(in.readObject());
-						}
-					} catch (EOFException eof) {
-						try {
-							in.close();
-						} catch (IOException io) {
-							System.out.println("HashJoin:Error in closing file");
-						}
-						close();
-						temp.close();
-					}
-					out = new ObjectOutputStream(new FileOutputStream(rfname));
-					in = new ObjectInputStream(new FileInputStream("tempFile"));
-					try{
-						while(true) {
-							out.writeObject(in.readObject());
-						}
-					} catch(EOFException eof) {
-						try {
-							in.close();
-							File f = new File("tempFile");
-							f.delete();
-							out.close();
-						} catch (IOException io) {
-							System.out.println("HashJoin:Error in closing file");
-						}
-					}
-					done = true;
-				} else {
-					hashTable[hash].add(tuple);
-				}
-			}
-		}
+        return outbatch;
     }
 
-}
 
-public class AppendingObjectOutputStream extends ObjectOutputStream {
 
-  public AppendingObjectOutputStream(OutputStream out) throws IOException {
-    super(out);
-  }
+    /** Close the operator */
+    public boolean close(){
+        //delete all the temp file
+        for(int i = 0; i < numBuff -1;i++){
+            String right_fname = "HJtempRight-" + String.valueOf(i) + this.hashCode();
+            String left_fname = "HJtempLeft-" + String.valueOf(i) + this.hashCode();
+            File f = new File(right_fname);
+            f.delete();
+            f = new File(left_fname);
+            f.delete();
+        }
+        return true;
 
-  @Override
-  protected void writeStreamHeader() throws IOException {
-    reset();
-  }
+    }
+
 
 }

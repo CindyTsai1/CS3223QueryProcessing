@@ -111,11 +111,16 @@ public class QueryMain{
 
 		Operator logicalroot;
 		PlanCost pc = new PlanCost();
-		if(pc.getCost(randomRoot) < pc.getCost(dynamicRoot)) {
-			logicalroot = randomRoot;
-		} else {
+		int randomCost = pc.getCost(randomRoot);
+        pc = new PlanCost();
+		int dynamicCost = pc.getCost(dynamicRoot);
+        System.out.println("Dynamiccost = " + dynamicCost);
+        System.out.println("Randomcost = " + randomCost);
+		//if(randomCost > dynamicCost) {
 			logicalroot = dynamicRoot;
-		}
+		//} else {
+		//	logicalroot = randomRoot;
+		//}
 
 		/** preparing the execution plan **/
 		Operator root = RandomOptimizer.makeExecPlan(logicalroot);
@@ -141,10 +146,12 @@ public class QueryMain{
 
 		long starttime = System.currentTimeMillis();
 
+
 		if(root.open()==false){
 			System.out.println("Root: Error in opening of root");
 			System.exit(1);
 		}
+
 		try{
 			out = new PrintWriter(new BufferedWriter(new FileWriter(resultfile)));
 		}catch(IOException io){
@@ -158,11 +165,15 @@ public class QueryMain{
 		printSchema(schema);
 		Batch resultbatch;
 
+
 		/** print each tuple in the result **/
 		while((resultbatch=root.next())!=null){
 			for(int i=0;i<resultbatch.size();i++){
 				printTuple(resultbatch.elementAt(i));
 			}
+			if(resultbatch.isEmpty()) {
+			    break;
+            }
 		}
 		root.close();
 		out.close();
